@@ -1,5 +1,7 @@
 import httpx
 
+from app.services.polymarket_rate_limiter import acquire_polymarket_rate_limit
+
 from py_clob_client.clob_types import (
     DropNotificationParams,
     BalanceAllowanceParams,
@@ -37,6 +39,7 @@ def overloadHeaders(method: str, headers: dict) -> dict:
 def request(endpoint: str, method: str, headers=None, data=None):
     try:
         headers = overloadHeaders(method, headers)
+        acquire_polymarket_rate_limit(method, endpoint)
         if isinstance(data, str):
             # Pre-serialized body: send exact bytes
             resp = _http_client.request(
