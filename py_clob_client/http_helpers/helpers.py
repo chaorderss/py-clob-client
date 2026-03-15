@@ -6,6 +6,7 @@ from app.services.polymarket_rate_limiter import (
     is_place_order_request,
     RateLimitDiscardedError,
     record_polymarket_request_error,
+    record_polymarket_cloudflare_block,
     try_acquire_polymarket_rate_limit,
 )
 
@@ -73,12 +74,11 @@ def request(endpoint: str, method: str, headers=None, data=None):
 
             # Cloudflare HTTP/2 stuck connection workaround
             if resp.status_code == 400 and "cloudflare" in (resp.text or "").lower():
-                print(f"[http_helpers] Detected Cloudflare 400 Bad Request blocked state. Sleeping 2s and recreating HTTP/2 client ({method} {endpoint})")
+                record_polymarket_cloudflare_block()
                 try:
                     _http_client.close()
                 except Exception:
                     pass
-                time.sleep(2)
                 _http_client = httpx.Client(http2=True)
 
             raise PolyApiException(resp)
