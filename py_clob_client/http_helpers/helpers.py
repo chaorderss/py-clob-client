@@ -1,4 +1,5 @@
 import httpx
+import time
 
 from app.services.polymarket_rate_limiter import (
     acquire_polymarket_rate_limit,
@@ -43,6 +44,7 @@ def overloadHeaders(method: str, headers: dict) -> dict:
 
 
 def request(endpoint: str, method: str, headers=None, data=None):
+    global _http_client
     try:
         headers = overloadHeaders(method, headers)
         if is_place_order_request(method, endpoint):
@@ -68,6 +70,17 @@ def request(endpoint: str, method: str, headers=None, data=None):
 
         if resp.status_code != 200:
             record_polymarket_request_error(method, endpoint)
+
+            # Cloudflare HTTP/2 stuck connection workaround
+            if resp.status_code == 400 and "cloudflare" in (resp.text or "").lower():
+                print(f"[http_helpers] Detected Cloudflare 400 Bad Request blocked state. Sleeping 2s and recreating HTTP/2 client ({method} {endpoint})")
+                try:
+                    _http_client.close()
+                except Exception:
+                    pass
+                time.sleep(2)
+                _http_client = httpx.Client(http2=True)
+
             raise PolyApiException(resp)
 
         try:
