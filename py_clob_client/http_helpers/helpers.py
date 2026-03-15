@@ -4,6 +4,7 @@ from app.services.polymarket_rate_limiter import (
     acquire_polymarket_rate_limit,
     is_place_order_request,
     RateLimitDiscardedError,
+    record_polymarket_request_error,
     try_acquire_polymarket_rate_limit,
 )
 
@@ -66,6 +67,7 @@ def request(endpoint: str, method: str, headers=None, data=None):
             )
 
         if resp.status_code != 200:
+            record_polymarket_request_error(method, endpoint)
             raise PolyApiException(resp)
 
         try:
@@ -74,6 +76,7 @@ def request(endpoint: str, method: str, headers=None, data=None):
             return resp.text
 
     except httpx.RequestError:
+        record_polymarket_request_error(method, endpoint)
         raise PolyApiException(error_msg="Request exception!")
 
 
