@@ -1,5 +1,8 @@
 import httpx
+import threading
 import time
+
+_http_client_lock = threading.Lock()
 
 from app.services.polymarket_rate_limiter import (
     acquire_polymarket_rate_limit,
@@ -44,15 +47,19 @@ def overloadHeaders(method: str, headers: dict) -> dict:
     return headers
 
 
-def request(endpoint: str, method: str, headers=None, data=None):
+def request(endpoint: str, method: str, headers=None, data=None, _retried=False):
     global _http_client
     try:
         headers = overloadHeaders(method, headers)
+        with _http_client_lock:
+            if getattr(_http_client, "is_closed", False):
+                _http_client = httpx.Client(http2=True)
+
         if is_place_order_request(method, endpoint):
             if not try_acquire_polymarket_rate_limit(method, endpoint):
                 raise RateLimitDiscardedError(f"Rate limited, discarding: {method} {endpoint}")
-        else:
-            acquire_polymarket_rate_limit(method, endpoint)
+            else:
+                acquire_polymarket_rate_limit(method, endpoint)
         if isinstance(data, str):
             # Pre-serialized body: send exact bytes
             resp = _http_client.request(
@@ -75,11 +82,13 @@ def request(endpoint: str, method: str, headers=None, data=None):
             # Cloudflare HTTP/2 stuck connection workaround
             if resp.status_code == 400 and "cloudflare" in (resp.text or "").lower():
                 record_polymarket_cloudflare_block()
-                try:
-                    _http_client.close()
-                except Exception:
-                    pass
-                _http_client = httpx.Client(http2=True)
+                with _http_client_lock:
+                    if getattr(_http_client, "is_closed", False) is False:
+                        try:
+                            _http_client.close()
+                        except Exception:
+                            pass
+                        _http_client = httpx.Client(http2=True)
 
             raise PolyApiException(resp)
 
@@ -88,9 +97,15 @@ def request(endpoint: str, method: str, headers=None, data=None):
         except ValueError:
             return resp.text
 
-    except httpx.RequestError:
+    except (httpx.RequestError, RuntimeError) as e:
+        if isinstance(e, RuntimeError) and "client has been closed" not in str(e).lower():
+            raise
+        if not _retried and isinstance(e, RuntimeError) and "client has been closed" in str(e).lower():
+            # The client was closed mid-flight by another thread handling a Cloudflare block. Retry once implicitly.
+            return request(endpoint, method, headers, data, _retried=True)
+
         record_polymarket_request_error(method, endpoint)
-        raise PolyApiException(error_msg="Request exception!")
+        raise PolyApiException(error_msg=f"Request exception! {e}")
 
 
 def post(endpoint, headers=None, data=None):
