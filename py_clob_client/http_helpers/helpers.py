@@ -100,9 +100,12 @@ def request(endpoint: str, method: str, headers=None, data=None, _retried=False)
     except (httpx.RequestError, RuntimeError) as e:
         if isinstance(e, RuntimeError) and "client has been closed" not in str(e).lower():
             raise
-        if not _retried and isinstance(e, RuntimeError) and "client has been closed" in str(e).lower():
-            # The client was closed mid-flight by another thread handling a Cloudflare block. Retry once implicitly.
-            return request(endpoint, method, headers, data, _retried=True)
+        # Retry once on transient transport errors: closed client or server disconnect
+        if not _retried:
+            msg = str(e).lower()
+            if (isinstance(e, RuntimeError) and "client has been closed" in msg) or \
+               (isinstance(e, httpx.RemoteProtocolError) and "server disconnected" in msg):
+                return request(endpoint, method, headers, data, _retried=True)
 
         record_polymarket_request_error(method, endpoint)
         raise PolyApiException(error_msg=f"Request exception! {e}")
