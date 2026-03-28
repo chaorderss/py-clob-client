@@ -98,12 +98,13 @@ def request(endpoint: str, method: str, headers=None, data=None, _retried=False)
             return resp.text
 
     except (httpx.RequestError, RuntimeError) as e:
-        if isinstance(e, RuntimeError) and "client has been closed" not in str(e).lower():
+        _retryable_runtime_msgs = ("client has been closed", "deque mutated during iteration")
+        if isinstance(e, RuntimeError) and not any(m in str(e).lower() for m in _retryable_runtime_msgs):
             raise
-        # Retry once on transient transport errors: closed client or server disconnect
+        # Retry once on transient transport errors: closed client, h2 deque race, or server disconnect
         if not _retried:
             msg = str(e).lower()
-            if (isinstance(e, RuntimeError) and "client has been closed" in msg) or \
+            if (isinstance(e, RuntimeError) and any(m in msg for m in _retryable_runtime_msgs)) or \
                (isinstance(e, httpx.RemoteProtocolError) and "server disconnected" in msg):
                 return request(endpoint, method, headers, data, _retried=True)
 
